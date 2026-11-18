@@ -1,0 +1,494 @@
+// Sistema analítico de centros de control - Milímetro de Segundo
+// Modelo relacional basado en el diagrama propuesto (marcas, cuenta,
+// publicaciones, competidores, métricas por período) ampliado con
+// clientes, usuarios/roles, contenido editorial, ingesta y auditoría.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Rol {
+  ADMINISTRADOR // gestión total: usuarios, carga de archivos, configuración
+  GERENTE // visualización completa de todos los tableros y consolidados
+  CLIENTE // solo las marcas vinculadas a su perfil
+}
+
+enum RedSocial {
+  INSTAGRAM
+  FACEBOOK
+  TIKTOK
+  LINKEDIN
+  X
+  YOUTUBE
+}
+
+enum Granularidad {
+  DIARIA
+  MENSUAL
+}
+
+enum TipoPublicacion {
+  POST
+  REEL
+  STORY
+  CAROUSEL
+  VIDEO
+}
+
+enum TipoContenidoManual {
+  PUBLICACION
+  HISTORIA
+}
+
+enum TipoUbicacion {
+  PAIS
+  CIUDAD
+}
+
+enum CategoriaDemografica {
+  SEXO
+  EDAD
+}
+
+enum ClaveTextoEditorial {
+  CONCLUSIONES
+  RECOMENDACIONES
+}
+
+enum FormatoArchivo {
+  CSV
+  XLSX
+}
+
+enum EstadoCarga {
+  PROCESANDO
+  COMPLETADA
+  RECHAZADA
+}
+
+// ---------------------------------------------------------------------------
+// Organización: clientes y marcas
+// ---------------------------------------------------------------------------
+
+/// Cliente de la agencia (Montalbán, MiMesa, Sherwin Williams).
+model Cliente {
+  id        String    @id @default(uuid()) @db.Uuid
+  clave     String    @unique // montalban, mimesa, sherwin
+  nombre    String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  marcas   Marca[]
+  usuarios Usuario[]
+
+  @@map("clientes")
+}
+
+/// Marca analizada (Papelón, Gella, Dulfit, MiMesa, Sherwin Williams).
+model Marca {
+  id          String    @id @default(uuid()) @db.Uuid
+  clienteId   String    @map("cliente_fk") @db.Uuid
+  clave       String    @unique // papelon, gella, dulfit, mimesa, sherwin-williams
+  nombre      String
+  metricoolId Int?      @map("metricool_id")
+  logoUrl     String?   @map("logo_url")
+  /// Paleta y opciones visuales: { primary, secondary, accent, ... }
+  tema        Json?
+  /// Secciones del dashboard habilitadas (competencia, comunicaciones, ...)
+  secciones   Json?
+  metaSeguidores Int?   @map("meta_seguidores")
+  /// Nombres alternativos con los que aparece en la hoja Competidores
+  aliases     String[]  @default([])
+  orden       Int       @default(0)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  cliente           Cliente            @relation(fields: [clienteId], references: [id])
+  cuentas           Cuenta[]
+  publicaciones     Publicacion[]
+  competidores      Competidor[]
+  ubicaciones       Ubicacion[]
+  notas             Nota[]
+  textosEditoriales TextoEditorial[]
+  comunicaciones    Comunicacion[]
+  contenidosManuales ContenidoManual[]
+  cargasArchivo     CargaArchivo[]
+  usuariosMarcas    UsuarioMarca[]
+
+  @@index([clienteId])
+  @@map("marcas")
+}
+
+// ---------------------------------------------------------------------------
+// Usuarios, roles y sesiones
+// ---------------------------------------------------------------------------
+
+model Usuario {
+  id           String    @id @default(uuid()) @db.Uuid
+  username     String    @unique
+  nombre       String
+  passwordHash String    @map("password_hash")
+  rol          Rol
+  /// Cliente al que pertenece (obligatorio para CLIENTE, opcional para el resto)
+  clienteId    String?   @map("cliente_fk") @db.Uuid
+  activo       Boolean   @default(true)
+  ultimoAcceso DateTime? @map("ultimo_acceso")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  cliente        Cliente?       @relation(fields: [clienteId], references: [id])
+  marcas         UsuarioMarca[]
+  sesiones       Sesion[]
+  cargasArchivo  CargaArchivo[]
+  auditoria      Auditoria[]
+
+  @@map("usuarios")
+}
+
+/// Marcas visibles para un usuario con rol CLIENTE.
+model UsuarioMarca {
+  usuarioId String   @map("usuario_fk") @db.Uuid
+  marcaId   String   @map("marca_fk") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  marca   Marca   @relation(fields: [marcaId], references: [id], onDelete: Cascade)
+
+  @@id([usuarioId, marcaId])
+  @@map("usuarios_marcas")
+}
+
+/// Sesión activa (permite expiración por inactividad y revocación).
+model Sesion {
+  id              String   @id @default(uuid()) @db.Uuid
+  usuarioId       String   @map("usuario_fk") @db.Uuid
+  tokenHash       String   @unique @map("token_hash")
+  ultimaActividad DateTime @default(now()) @map("ultima_actividad")
+  expiraEn        DateTime @map("expira_en")
+  userAgent       String?  @map("user_agent")
+  ip              String?
+  createdAt       DateTime @default(now()) @map("created_at")
+  revocadaEn      DateTime? @map("revocada_en")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@map("sesiones")
+}
+
+// ---------------------------------------------------------------------------
+// Cuenta de red social y sus métricas por período
+// ---------------------------------------------------------------------------
+
+model Cuenta {
+  id          String    @id @default(uuid()) @db.Uuid
+  marcaId     String    @map("marca_fk") @db.Uuid
+  network     RedSocial
+  handle      String?
+  metricoolId Int?      @map("metricool_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  marca      Marca              @relation(fields: [marcaId], references: [id])
+  metricas   MetricaCuenta[]
+  demografia DemografiaCuenta[]
+
+  @@unique([marcaId, network])
+  @@map("cuentas")
+}
+
+/// Métricas de la cuenta en un período (día o mes). Columnas tipadas para
+/// las métricas conocidas del Excel + `extra` para campos no mapeados.
+model MetricaCuenta {
+  id           Int          @id @default(autoincrement())
+  cuentaId     String       @map("cuenta_fk") @db.Uuid
+  periodo      DateTime     @db.Date // día 1 del mes cuando es MENSUAL
+  granularidad Granularidad @default(MENSUAL)
+
+  // Seguidores (hoja Seguidores)
+  seguidores          Int?
+  variacionSeguidores Int?     @map("variacion_seguidores")
+  publicacionesCount  Int?     @map("publicaciones_count")
+
+  // Interacciones SIN ADS
+  meGusta        Int? @map("me_gusta")
+  comentarios    Int?
+  compartidos    Int?
+  guardados      Int?
+  reposteos      Int?
+  alcancePosts   Int? @map("alcance_posts")
+
+  // Métricas SIN ADS
+  impresionesPosts Int?     @map("impresiones_posts")
+  visitasPerfil    Int?     @map("visitas_perfil")
+  engagement       Decimal? @db.Decimal(8, 4)
+  alcanceReels     Int?     @map("alcance_reels")
+  reproduccionesReels Int?  @map("reproducciones_reels")
+
+  // Métricas ST (historias)
+  impresionesHistorias Int? @map("impresiones_historias")
+  alcanceHistorias     Int? @map("alcance_historias")
+  historiasCount       Int? @map("historias_count")
+
+  extra     Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  cuenta Cuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
+
+  @@unique([cuentaId, periodo, granularidad])
+  @@map("metricas_cuenta")
+}
+
+/// Demografía de la audiencia por período (hoja Sexo y edad).
+model DemografiaCuenta {
+  id         Int                  @id @default(autoincrement())
+  cuentaId   String               @map("cuenta_fk") @db.Uuid
+  periodo    DateTime             @db.Date
+  categoria  CategoriaDemografica
+  segmento   String // Masculino | Femenino | Desconocido | 13-17 | 18-24 ...
+  porcentaje Decimal              @db.Decimal(6, 2)
+  createdAt  DateTime             @default(now()) @map("created_at")
+
+  cuenta Cuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
+
+  @@unique([cuentaId, periodo, categoria, segmento])
+  @@map("demografia_cuenta")
+}
+
+// ---------------------------------------------------------------------------
+// Publicaciones (origen Metricool/CSV) y sus métricas
+// ---------------------------------------------------------------------------
+
+model Publicacion {
+  id               String          @id @default(uuid()) @db.Uuid
+  marcaId          String          @map("marca_fk") @db.Uuid
+  network          RedSocial
+  tipo             TipoPublicacion
+  metricoolId      String?         @map("metricool_id")
+  fechaPublicacion DateTime        @map("fecha_publicacion")
+  permalink        String?
+  texto            String?
+  metricasAcumuladas Json?         @map("metricas_acumuladas")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+  deletedAt        DateTime?       @map("deleted_at")
+
+  marca    Marca                @relation(fields: [marcaId], references: [id])
+  metricas MetricaPublicacion[]
+
+  @@unique([marcaId, network, metricoolId])
+  @@index([marcaId, fechaPublicacion])
+  @@map("publicaciones")
+}
+
+model MetricaPublicacion {
+  id             Int       @id @default(autoincrement())
+  publicacionId  String    @map("publicacion_fk") @db.Uuid
+  periodo        DateTime  @db.Date
+  impresiones    Int?
+  alcance        Int?
+  meGusta        Int?      @map("me_gusta")
+  comentarios    Int?
+  compartidos    Int?
+  guardados      Int?
+  reproducciones Int?
+  extra          Json?
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  publicacion Publicacion @relation(fields: [publicacionId], references: [id], onDelete: Cascade)
+
+  @@unique([publicacionId, periodo])
+  @@map("metricas_publicacion")
+}
+
+// ---------------------------------------------------------------------------
+// Competidores
+// ---------------------------------------------------------------------------
+
+model Competidor {
+  id          String    @id @default(uuid()) @db.Uuid
+  marcaId     String    @map("marca_fk") @db.Uuid
+  nombre      String
+  network     RedSocial @default(INSTAGRAM)
+  metricoolId Int?      @map("metricool_id")
+  /// true cuando la fila de Competidores corresponde a la propia marca
+  esPropia    Boolean   @default(false) @map("es_propia")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  marca    Marca               @relation(fields: [marcaId], references: [id])
+  metricas MetricaCompetidor[]
+
+  @@unique([marcaId, network, nombre])
+  @@map("competidores")
+}
+
+model MetricaCompetidor {
+  id            Int      @id @default(autoincrement())
+  competidorId  String   @map("competidor_fk") @db.Uuid
+  periodo       DateTime @db.Date
+  seguidores    Int?
+  publicaciones Int?
+  meGusta       Int?     @map("me_gusta")
+  comentarios   Int?
+  engagement    Decimal? @db.Decimal(8, 4)
+  extra         Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  competidor Competidor @relation(fields: [competidorId], references: [id], onDelete: Cascade)
+
+  @@unique([competidorId, periodo])
+  @@map("metricas_competidor")
+}
+
+// ---------------------------------------------------------------------------
+// Contenido editorial administrado desde el dashboard
+// ---------------------------------------------------------------------------
+
+/// Países y ciudades con porcentaje de audiencia.
+model Ubicacion {
+  id         String        @id @default(uuid()) @db.Uuid
+  marcaId    String        @map("marca_fk") @db.Uuid
+  tipo       TipoUbicacion
+  nombre     String
+  porcentaje Decimal       @db.Decimal(6, 2)
+  orden      Int           @default(0)
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
+
+  marca Marca @relation(fields: [marcaId], references: [id], onDelete: Cascade)
+
+  @@unique([marcaId, tipo, nombre])
+  @@map("ubicaciones")
+}
+
+/// Nota de análisis asociada a un gráfico (clave p.ej. "interacciones.likes").
+model Nota {
+  id        String   @id @default(uuid()) @db.Uuid
+  marcaId   String   @map("marca_fk") @db.Uuid
+  clave     String
+  texto     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  marca Marca @relation(fields: [marcaId], references: [id], onDelete: Cascade)
+
+  @@unique([marcaId, clave])
+  @@map("notas")
+}
+
+/// Conclusiones y recomendaciones del período.
+model TextoEditorial {
+  id        String              @id @default(uuid()) @db.Uuid
+  marcaId   String              @map("marca_fk") @db.Uuid
+  clave     ClaveTextoEditorial
+  texto     String
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+
+  marca Marca @relation(fields: [marcaId], references: [id], onDelete: Cascade)
+
+  @@unique([marcaId, clave])
+  @@map("textos_editoriales")
+}
+
+/// Comunicaciones internas (sección exclusiva de MiMesa).
+model Comunicacion {
+  id        String    @id @default(uuid()) @db.Uuid
+  marcaId   String    @map("marca_fk") @db.Uuid
+  tema      String // p.ej. "Día de la inocuidad"
+  formato   String // p.ej. "4 mailing + 4 stories"
+  periodo   DateTime? @db.Date // mes al que pertenece
+  orden     Int       @default(0)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  marca Marca @relation(fields: [marcaId], references: [id], onDelete: Cascade)
+
+  @@map("comunicaciones")
+}
+
+/// Publicaciones e historias destacadas registradas manualmente por el
+/// administrador, con imagen subida y métricas puntuales.
+model ContenidoManual {
+  id        String              @id @default(uuid()) @db.Uuid
+  marcaId   String              @map("marca_fk") @db.Uuid
+  tipo      TipoContenidoManual
+  fecha     DateTime            @db.Date
+  imagenUrl String?             @map("imagen_url")
+  /// Publicación: views, likes, comments, shares, reposts, saves
+  /// Historia: reach, impressions, responses
+  metricas  Json
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+  deletedAt DateTime?           @map("deleted_at")
+
+  marca Marca @relation(fields: [marcaId], references: [id], onDelete: Cascade)
+
+  @@index([marcaId, tipo, fecha])
+  @@map("contenidos_manuales")
+}
+
+// ---------------------------------------------------------------------------
+// Ingesta batch y auditoría
+// ---------------------------------------------------------------------------
+
+/// Registro de cada archivo CSV/XLSX procesado (trazabilidad y métricas de
+/// rendimiento: duración, filas, errores).
+model CargaArchivo {
+  id             String         @id @default(uuid()) @db.Uuid
+  marcaId        String         @map("marca_fk") @db.Uuid
+  usuarioId      String?        @map("usuario_fk") @db.Uuid
+  nombreArchivo  String         @map("nombre_archivo")
+  formato        FormatoArchivo
+  tamanoBytes    Int            @map("tamano_bytes")
+  hashSha256     String         @map("hash_sha256")
+  periodo        DateTime?      @db.Date
+  estado         EstadoCarga    @default(PROCESANDO)
+  filasLeidas    Int            @default(0) @map("filas_leidas")
+  filasInsertadas Int           @default(0) @map("filas_insertadas")
+  errores        Json?
+  duracionMs     Int?           @map("duracion_ms")
+  rutaAlmacenada String?        @map("ruta_almacenada")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  finalizadoEn   DateTime?      @map("finalizado_en")
+
+  marca   Marca    @relation(fields: [marcaId], references: [id])
+  usuario Usuario? @relation(fields: [usuarioId], references: [id])
+
+  @@index([marcaId, createdAt])
+  @@map("cargas_archivo")
+}
+
+model Auditoria {
+  id        BigInt   @id @default(autoincrement())
+  usuarioId String?  @map("usuario_fk") @db.Uuid
+  operacion String // login, logout, nota.guardar, carga.procesar, ...
+  entidad   String?
+  entidadId String?  @map("entidad_id")
+  detalles  Json?
+  ip        String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  usuario Usuario? @relation(fields: [usuarioId], references: [id])
+
+  @@index([createdAt])
+  @@index([usuarioId])
+  @@map("auditoria")
+}

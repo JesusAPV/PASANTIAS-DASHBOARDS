@@ -1,0 +1,16 @@
+{
+  "name": "milimetro-dashboard",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Sistema analítico de centros de control - Milímetro de Segundo (Vue 3 + Quasar / Express + Prisma / PostgreSQL)",
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:server": "pnpm --filter server dev",
+    "dev:client": "pnpm --filter client dev",
+    "build": "pnpm --filter client build",
+    "test": "pnpm --filter server test",
+    "prisma": "pnpm --filter server exec prisma"
+  },
+  "engines": { "node": ">=20" },
+  "packageManager": "pnpm@10.33.0"
+}

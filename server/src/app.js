@@ -1,0 +1,30 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import { config } from './config.js';
+import { errorHandler } from './lib/errors.js';
+import authRoutes from './modules/auth/auth.routes.js';
+import marcasRoutes from './modules/marcas/marcas.routes.js';
+import ingestaRoutes from './modules/ingesta/ingesta.routes.js';
+import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import usuariosRoutes from './modules/usuarios/usuarios.routes.js';
+import archivosRoutes from './modules/archivos/archivos.routes.js';
+export function createApp() {
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+  app.use(cors({ origin: config.corsOrigin, credentials: true, exposedHeaders: ['X-Session-Expires'] }));
+  app.use(express.json({ limit: '2mb' }));
+  app.use(cookieParser());
+  app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'milimetro-dashboard-api', time: new Date().toISOString() }));
+  app.use('/api/auth', authRoutes);
+  app.use('/api/marcas', marcasRoutes);
+  app.use('/api/ingesta', ingestaRoutes);
+  app.use('/api/dashboard', dashboardRoutes);
+  app.use('/api/usuarios', usuariosRoutes);
+  app.use('/uploads', archivosRoutes);
+  app.use((_req, res) => res.status(404).json({ ok: false, error: 'Ruta no encontrada.', code: 'route_not_found' }));
+  app.use(errorHandler);
+  return app;
+}
